@@ -62,9 +62,16 @@ def get_client(access_key_id, secret_access_key, region, profile):
               help='Description/comment for recording the deployment')
 @click.option('--user', required=False,
               help='User who executes the deployment (used for recording)')
+@click.option('--reverse-backoff-starting', required=False, type=int,
+              help='Starting waiting time for checking if service has changed')
+@click.option('--reverse-backoff-minimum', required=False, default=4, type=int,
+              help='Minimum waiting time for checking if service has changed')
+@click.option('--reverse-backoff-rate', required=False, default=2, type=int,
+              help='Rate of how reverse backoff changes')
 def deploy(cluster, service, tag, image, command, env, role, task, region,
            access_key_id, secret_access_key, profile, timeout, newrelic_apikey,
-           newrelic_appid, comment, user, ignore_warnings):
+           newrelic_appid, comment, user, ignore_warnings, reverse_backoff_starting,
+           reverse_backoff_minimum, reverse_backoff_rate):
     """
     Redeploy or modify a service.
 
@@ -118,7 +125,10 @@ def deploy(cluster, service, tag, image, command, env, role, task, region,
             title='Deploying task definition',
             success_message='Deployment successful',
             failure_message='Deployment failed',
-            ignore_warnings=ignore_warnings
+            ignore_warnings=ignore_warnings,
+            reverse_backoff_starting=reverse_backoff_starting,
+            reverse_backoff_minimum=reverse_backoff_minimum,
+            reverse_backoff_rate=reverse_backoff_rate
         )
 
     except Exception as e:
@@ -143,8 +153,15 @@ def deploy(cluster, service, tag, image, command, env, role, task, region,
 @click.option('--ignore-warnings', is_flag=True,
               help='Do not fail deployment on warnings (port already in use '
                    'or insufficient memory/CPU)')
+@click.option('--reverse-backoff-starting', required=False, type=int,
+              help='Starting waiting time for checking if service has changed')
+@click.option('--reverse-backoff-minimum', required=False, default=4, type=int,
+              help='Minimum waiting time for checking if service has changed')
+@click.option('--reverse-backoff-rate', required=False, default=2, type=int,
+              help='Rate of how reverse backoff changes')
 def scale(cluster, service, desired_count, access_key_id, secret_access_key,
-          region, profile, timeout, ignore_warnings):
+          region, profile, timeout, ignore_warnings, reverse_backoff_starting,
+          reverse_backoff_minimum, reverse_backoff_rate):
     """
     Scale a service up or down.
 
@@ -168,7 +185,10 @@ def scale(cluster, service, desired_count, access_key_id, secret_access_key,
             title='Scaling service',
             success_message='Scaling successful',
             failure_message='Scaling failed',
-            ignore_warnings=ignore_warnings
+            ignore_warnings=ignore_warnings,
+            reverse_backoff_starting=reverse_backoff_starting,
+            reverse_backoff_minimum=reverse_backoff_minimum,
+            reverse_backoff_rate=reverse_backoff_rate
         )
 
     except Exception as e:
@@ -233,15 +253,19 @@ def run(cluster, task, count, command, env, region, access_key_id,
 
 
 def wait_for_finish(action, timeout, title, success_message, failure_message,
-                    ignore_warnings):
+                    ignore_warnings, reverse_backoff_starting, reverse_backoff_minimum,
+                    reverse_backoff_rate):
     click.secho(title, nl=False)
     waiting = True
     waiting_timeout = datetime.now() + timedelta(seconds=timeout)
     service = action.get_service()
     inspected_until = None
+    reverse_backoff = reverse_backoff_starting
+    if not reverse_backoff:
+        reverse_backoff = 1
     while waiting and datetime.now() < waiting_timeout:
         click.secho('.', nl=False)
-        sleep(1)
+        sleep(reverse_backoff)
         service = action.get_service()
         inspected_until = inspect_errors(
             service=service,
@@ -251,6 +275,10 @@ def wait_for_finish(action, timeout, title, success_message, failure_message,
             timeout=False
         )
         waiting = not action.is_deployed(service)
+        if reverse_backoff_starting:
+            new_reverse_backoff = reverse_backoff / reverse_backoff_rate
+            if new_reverse_backoff >= reverse_backoff_minimum:
+                reverse_backoff = new_reverse_backoff
 
     inspect_errors(
         service=service,
